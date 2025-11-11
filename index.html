@@ -1574,7 +1574,7 @@
           <div id="agent-info">Loading user info...</div> 
           <div id="admin-panel"><label for="agent-select">Punch For:</label><select id="agent-select"></select></div>
 
-          <div id="current-status-display" class="status-message" style="visibility: hidden; text-align: left; font-size: 1.1rem; border-left-width: 5px; margin-top: 0; margin-bottom: 20px;">
+          <div id="current-status-display" class="status-message" style="visibility: visible ; text-align: left; font-size: 1.1rem; border-left-width: 5px; margin-top: 0; margin-bottom: 20px;">
             </div>
           <div id="status" class="status-message"></div>
           <div id="buttons">
@@ -1667,9 +1667,30 @@
         <!--    TAB 5: SCHEDULE EDITOR PANEL    -->
         <!-- ================================== -->
         <div id="schedule-panel" class="tab-panel">
+          
           <form id="csv-import-form" class="form-container">
             <h2>Bulk Schedule Importer (CSV)</h2>
-            <p class="text-color-secondary">Upload a CSV file with headers: `Name`, `Date` (MM/dd/yyyy), `StartTime` (HH:mm), `EndTime` (HH:mm), `LeaveType`, `Email`</p>
+            
+            <p class="text-color-secondary" style="text-align: left; max-width: 600px; margin: 0 auto 15px auto; padding: 10px; background-color: var(--page-bg); border-radius: 8px;">
+              <strong>Upload a CSV with the following headers:</strong>
+              <br>
+              <code>Name</code>, <code>Email</code>, <code>StartDate</code>, <code>StartTime</code>, <code>EndDate</code>, <code>EndTime</code>, <code>LeaveType</code>
+              <br><br>
+              <ul style="margin: 0 0 0 20px; padding: 0; font-size: 0.9rem;">
+                <li><strong><code>StartDate</code> (Required):</strong> Date of the shift (format: MM/dd/yyyy).</li>
+                <li><strong><code>Email</code> (Required):</strong> The user's unique email address.</li>
+                <li><strong><code>LeaveType</code>:</strong> Use "Present" for a work day. For any other value (e.g., "Sick", "Annual", "Day Off"), the times will be ignored.</li>
+                <li><strong><code>StartTime</code> / <code>EndTime</code>:</strong> Required if <code>LeaveType</code> is "Present" (format: HH:mm).</li>
+                <li><strong><code>EndDate</code> (Optional):</strong> Only fill this if the shift ends on a different calendar day (e.g., for an overnight shift). If left blank, it will default to the <code>StartDate</code>.</li>
+              </ul>
+            </p>
+            <button 
+              type="button" 
+              class="view-btn" 
+              style="background-color:var(--text-color-secondary); margin-bottom: 20px; max-width: 300px; align-self: center;" 
+              onclick="downloadScheduleTemplate()">
+              Download CSV Template
+            </button>
             <div class="form-group">
               <label for="csv-file-input">Select CSV File</label>
               <input type="file" id="csv-file-input" accept=".csv">
@@ -3536,6 +3557,38 @@ function populateHistoryReport(data) {
         }
         return result;
       }
+
+      // --- NEW: Function to download the CSV template ---
+      function downloadScheduleTemplate() {
+        // These are the exact headers your code.gs file looks for
+        const headers = "Name,Email,StartDate,StartTime,EndDate,EndTime,LeaveType";
+        
+        // Add some example rows to guide the user
+        const example1 = "John Doe,john.doe@email.com,11/30/2025,09:00,,18:00,Present";
+        const example2 = "Jane Smith,jane.smith@email.com,11/30/2025,,,,Sick";
+        const example3 = "Peter Jones,peter.jones@email.com,12/01/2025,22:00,12/02/2025,06:00,Present,,,(Overnight shift example)"; // Overnight example
+        
+        // Combine headers and examples, separated by new lines
+        const csvContent = [headers, example1, example2, example3].join("\r\n");
+
+        // Create a "blob" (a file in the browser's memory)
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        
+        // Create a temporary link element
+        const link = document.createElement("a");
+        if (link.download !== undefined) { // Check for browser support
+          const url = URL.createObjectURL(blob);
+          link.setAttribute("href", url);
+          link.setAttribute("download", "schedule_template.csv");
+          link.style.visibility = 'hidden';
+          
+          // Add link to the page, click it, and then remove it
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+      }
+      // --- END OF NEW FUNCTION ---
 
       // --- Dashboard Functions ---
       
