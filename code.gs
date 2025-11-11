@@ -37,19 +37,39 @@ function doGet() {
 function webPunch(action, targetUserName, adminTimestamp) { 
   try {
     const puncherEmail = Session.getActiveUser().getEmail().toLowerCase();
-    const result = punch(action, targetUserName, puncherEmail, adminTimestamp); 
-    return result;
+    const resultMessage = punch(action, targetUserName, puncherEmail, adminTimestamp); // <-- Renamed to 'resultMessage'
+    
+    // --- START: NEW STATUS LOGIC ---
+    // Get the user's new status after the punch
+    const userEmail = Session.getActiveUser().getEmail().toLowerCase(); // This is puncher
+    
+    const dbSheet = getOrCreateSheet(getSpreadsheet(), SHEET_NAMES.database);
+    const userData = getUserDataFromDb(dbSheet);
+    
+    const targetEmail = (targetUserName === userData.emailToName[userEmail]) ? userEmail : userData.nameToEmail[targetUserName];
+    
+    const timeZone = Session.getScriptTimeZone();
+    const now = adminTimestamp ? new Date(adminTimestamp) : new Date();
+    const shiftDate = getShiftDate(now, SHIFT_CUTOFF_HOUR);
+    const formattedDate = Utilities.formatDate(shiftDate, timeZone, "MM/dd/yyyy");
+        
+    const newStatus = getLatestPunchStatus(targetEmail, targetUserName, shiftDate, formattedDate);
+    // --- END: NEW STATUS LOGIC ---
+
+    return { message: resultMessage, newStatus: newStatus }; // Return an object
+
   } catch (err) {
-    return "Error: " + err.message;
+    // Return error in the same object format
+    return { message: "Error: " + err.message, newStatus: null };
   }
 }
 
 // REPLACE this function
-function webSubmitScheduleRange(userEmail, userName, startDateStr, endDateStr, startTime, endTime, leaveType) {
+function webSubmitScheduleRange(userEmail, userName, startDateStr, endDateStr, startTime, endTime, leaveType, shiftEndDate) { // <-- ADD shiftEndDate
   try {
     const puncherEmail = Session.getActiveUser().getEmail().toLowerCase();
-    // *** NEW: Pass all 7 fields to submitScheduleRange ***
-    const result = submitScheduleRange(puncherEmail, userEmail, userName, startDateStr, endDateStr, startTime, endTime, leaveType);
+    // *** MODIFIED: Pass all 8 fields to submitScheduleRange ***
+    const result = submitScheduleRange(puncherEmail, userEmail, userName, startDateStr, endDateStr, startTime, endTime, leaveType, shiftEndDate);
     return result;
   } catch (err) {
     return "Error: " + err.message;
@@ -1141,9 +1161,18 @@ function getUserInfo() {
     
     // *** NEW: Get the user's account status ***
     const accountStatus = userData.emailToAccountStatus[userEmail] || 'Pending';
-    
     const userName = userData.emailToName[userEmail] || ""; 
     const role = userData.emailToRole[userEmail] || 'agent'; 
+
+    // --- START: NEW STATUS LOGIC ---
+    let currentStatus = null;
+    if (accountStatus === 'Active') {
+      const now = new Date();
+      const shiftDate = getShiftDate(now, SHIFT_CUTOFF_HOUR);
+      const formattedDate = Utilities.formatDate(shiftDate, timeZone, "MM/dd/yyyy");
+      currentStatus = getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate);
+    }
+    // --- END: NEW STATUS LOGIC ---
 
     let allUsers = []; 
     let allAdmins = [];
@@ -1170,6 +1199,8 @@ break;
     }
   }
 }
+
+
 // *** END BLOCK ***
 
     return {
@@ -1181,7 +1212,8 @@ break;
       myBalances: myBalances,
       isNewUser: isNewUser, // This flag is still useful
       accountStatus: accountStatus, // *** NEW: Send status to frontend ***
-      hasPendingRoleRequests: hasPendingRoleRequests // *** ADD THIS LINE ***
+      hasPendingRoleRequests: hasPendingRoleRequests, // *** ADD THIS LINE ***
+      currentStatus: currentStatus // <-- ADD THIS LINE
     };
 } catch (e) {
     throw new Error("Failed in getUserInfo: " + e.message);
@@ -1250,8 +1282,8 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     // Read all 7 columns
     [schName, schStartDate, schStartTime, schEndDate, schEndTime, schLeave, schEmail] = scheduleData[i];
     
-    const dateObj = new Date(schStartDate); // Use StartDate (Col B) for matching
-    if (isNaN(dateObj.getTime())) continue;
+    const dateObj = parseDate(schStartDate); // Use StartDate (Col B) for matching
+    if (!dateObj || isNaN(dateObj.getTime())) continue;
     const dateStr = Utilities.formatDate(dateObj, timeZone, "MM/dd/yyyy");
     
     // Check Email (Col G, index 6)
@@ -1439,51 +1471,52 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
 // ================= SCHEDULE RANGE SUBMIT FUNCTION =================
 function submitScheduleRange(puncherEmail, userEmail, userName, startDateStr, endDateStr, startTime, endTime, leaveType) {
   const ss = getSpreadsheet();
-  const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.database);
+const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.database);
   const userData = getUserDataFromDb(dbSheet);
   const puncherRole = userData.emailToRole[puncherEmail] || 'agent';
   const timeZone = Session.getScriptTimeZone();
-  if (puncherRole !== 'admin' && puncherRole !== 'superadmin') {
+if (puncherRole !== 'admin' && puncherRole !== 'superadmin') {
     throw new Error("Permission denied. Only admins can submit schedules.");
-  }
+}
   
   const scheduleSheet = getOrCreateSheet(ss, SHEET_NAMES.schedule);
   const scheduleData = scheduleSheet.getDataRange().getValues();
   const logsSheet = getOrCreateSheet(ss, SHEET_NAMES.logs);
-  const userScheduleMap = {};
+const userScheduleMap = {};
   for (let i = 1; i < scheduleData.length; i++) {
     // *** MODIFIED: Read Email from Col G (index 6) ***
-    const rowEmail = scheduleData[i][6]; 
-    // *** MODIFIED: Read Date from Col B (index 1) ***
-    const rowDateRaw = scheduleData[i][1]; 
-    if (rowEmail && rowDateRaw && rowEmail.toLowerCase() === userEmail) {
+    const rowEmail = scheduleData[i][6];
+// *** MODIFIED: Read Date from Col B (index 1) ***
+    const rowDateRaw = scheduleData[i][1];
+if (rowEmail && rowDateRaw && rowEmail.toLowerCase() === userEmail) {
       const rowDate = new Date(rowDateRaw);
-      const rowDateStr = Utilities.formatDate(rowDate, timeZone, "MM/dd/yyyy");
+const rowDateStr = Utilities.formatDate(rowDate, timeZone, "MM/dd/yyyy");
       userScheduleMap[rowDateStr] = i + 1;
-    }
+}
   }
   
   const startDate = new Date(startDateStr);
   const endDate = new Date(endDateStr);
-  let currentDate = new Date(startDate);
+let currentDate = new Date(startDate);
   let daysProcessed = 0;
   let daysUpdated = 0;
   let daysCreated = 0;
-  const oneDayInMs = 24 * 60 * 60 * 1000;
+const oneDayInMs = 24 * 60 * 60 * 1000;
   
   currentDate = new Date(currentDate.valueOf() + currentDate.getTimezoneOffset() * 60000);
-  const finalDate = new Date(endDate.valueOf() + endDate.getTimezoneOffset() * 60000);
+const finalDate = new Date(endDate.valueOf() + endDate.getTimezoneOffset() * 60000);
   
   while (currentDate <= finalDate) {
     const currentDateStr = Utilities.formatDate(currentDate, timeZone, "MM/dd/yyyy");
-    
-    // *** NEW: Auto-calculate shift end date for overnight shifts ***
-    let shiftEndDate = new Date(currentDate); // Start with the same date
+// *** NEW: Auto-calculate shift end date for overnight shifts ***
+    let shiftEndDate = new Date(currentDate);
+// Start with the same date
     if (startTime && endTime) {
       const startDateTime = createDateTime(currentDate, startTime);
-      const endDateTime = createDateTime(currentDate, endTime);
+const endDateTime = createDateTime(currentDate, endTime);
       if (endDateTime <= startDateTime) {
-        shiftEndDate.setDate(shiftEndDate.getDate() + 1); // It's the next day
+        shiftEndDate.setDate(shiftEndDate.getDate() + 1);
+// It's the next day
       }
     }
     // *** END NEW ***
@@ -1496,16 +1529,16 @@ function submitScheduleRange(puncherEmail, userEmail, userName, startDateStr, en
       currentDateStr, 
       startTime, endTime, leaveType, puncherEmail
     );
-    if (result === "UPDATED") daysUpdated++;
+if (result === "UPDATED") daysUpdated++;
     if (result === "CREATED") daysCreated++;
     
     daysProcessed++;
     currentDate.setTime(currentDate.getTime() + oneDayInMs);
-  }
+}
   
   if (daysProcessed === 0) {
     throw new Error("No dates were processed. Check date range.");
-  }
+}
   
   return `Schedule submission complete for ${userName}. Days processed: ${daysProcessed} (Updated: ${daysUpdated}, Created: ${daysCreated}).`;
 }
@@ -1625,6 +1658,111 @@ function getUserDataFromDb(dbSheet) {
     nameToEmail, emailToName, emailToRole, emailToBalances, 
     emailToRow, emailToSupervisor, emailToAccountStatus, 
     emailToHiringDate, userList 
+  };
+}
+
+
+
+/**
+ * NEW: Finds the latest adherence or other code punch for a user 
+ * on a given shift date and determines their current logical status.
+ */
+function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
+  const ss = getSpreadsheet();
+  const adherenceSheet = getOrCreateSheet(ss, SHEET_NAMES.adherence);
+  const otherCodesSheet = getOrCreateSheet(ss, SHEET_NAMES.otherCodes);
+  
+  let lastAdherencePunch = null;
+  let lastAdherenceTime = new Date(0);
+  let lastOtherPunch = null;
+  let lastOtherTime = new Date(0);
+
+  // 1. Check Adherence Tracker
+  const adherenceData = adherenceSheet.getDataRange().getValues();
+  for (let i = adherenceData.length - 1; i > 0; i--) {
+    const row = adherenceData[i];
+    if (row[1] === userName && Utilities.formatDate(new Date(row[0]), Session.getScriptTimeZone(), "MM/dd/yyyy") === formattedDate) {
+      // Found the user's row for today. Now find their last punch.
+      // Columns: Login (2), B1-In(3), B1-Out(4), L-In(5), L-Out(6), B2-In(7), B2-Out(8), Logout(9)
+      const punches = [
+        { name: "Login", time: row[2] },
+        { name: "First Break In", time: row[3] },
+        { name: "First Break Out", time: row[4] },
+        { name: "Lunch In", time: row[5] },
+        { name: "Lunch Out", time: row[6] },
+        { name: "Last Break In", time: row[7] },
+        { name: "Last Break Out", time: row[8] },
+        { name: "Logout", time: row[9] }
+      ];
+
+      for (const punch of punches) {
+        if (punch.time instanceof Date && punch.time > lastAdherenceTime) {
+          lastAdherenceTime = punch.time;
+          lastAdherencePunch = punch.name;
+        }
+      }
+      break; // Found the right row, no need to search further
+    }
+  }
+
+  // 2. Check Other Codes
+  const otherCodesData = otherCodesSheet.getDataRange().getValues();
+  for (let i = otherCodesData.length - 1; i > 0; i--) {
+    const row = otherCodesData[i];
+    const rowShiftDate = getShiftDate(new Date(row[0]), SHIFT_CUTOFF_HOUR);
+    if (row[1] === userName && Utilities.formatDate(rowShiftDate, Session.getScriptTimeZone(), "MM/dd/yyyy") === formattedDate) {
+      // Check both "In" (col 3) and "Out" (col 4)
+      const timeIn = row[3];
+      const timeOut = row[4];
+      const code = row[2];
+
+      if (timeIn instanceof Date && timeIn > lastOtherTime) {
+        lastOtherTime = timeIn;
+        lastOtherPunch = `${code} In`;
+      }
+      if (timeOut instanceof Date && timeOut > lastOtherTime) {
+        lastOtherTime = timeOut;
+        lastOtherPunch = `${code} Out`;
+      }
+    }
+  }
+
+  // 3. Compare and determine final status
+  let lastPunchName = null;
+  let lastPunchTime = null;
+
+  if (lastAdherenceTime > lastOtherTime) {
+    lastPunchName = lastAdherencePunch;
+    lastPunchTime = lastAdherenceTime;
+  } else {
+    lastPunchName = lastOtherPunch;
+    lastPunchTime = lastOtherTime;
+  }
+
+  if (!lastPunchName) {
+    return null; // No punches found
+  }
+
+  // 4. Determine logical *current* status
+  let currentStatus = "Logged Out";
+  if (lastPunchName.endsWith(" In")) {
+    // "Login", "First Break In", "Lunch In", "Coaching In", etc.
+    currentStatus = lastPunchName.replace(" In", "");
+    if (currentStatus === "Login") {
+       currentStatus = "Logged In";
+    } else {
+       currentStatus = `On ${currentStatus}`;
+    }
+  } else if (lastPunchName.endsWith(" Out") && lastPunchName !== "Logout") {
+    // "First Break Out", "Lunch Out", "Coaching Out", etc.
+    currentStatus = "Logged In"; // After a break/meeting ends, status is Logged In
+  } else if (lastPunchName === "Logout") {
+    currentStatus = "Logged Out";
+  }
+
+  return {
+    status: currentStatus,
+    time: convertDateToString(lastPunchTime) // Use existing helper
   };
 }
 
@@ -1899,9 +2037,9 @@ function dailyLeaveSweeper() {
         continue;
       }
 
-      const schDateObj = new Date(schDate);
+     const schDateObj = parseDate(schDate);
       
-      if (schDateObj >= startDate && schDateObj <= endDate) {
+      if (schDateObj && schDateObj >= startDate && schDateObj <= endDate) {
         const schDateStr = Utilities.formatDate(schDateObj, timeZone, "MM/dd/yyyy");
         const userName = schName.toString().trim();
         const userNameLower = userName.toLowerCase();
@@ -2302,7 +2440,7 @@ function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
     // Check against the lowercase name set
     if (targetUserSet.has(schName)) {
       try {
-        const schDate = new Date(scheduleData[i][1]);
+        const schDate = parseDate(scheduleData[i][1]);
         if (schDate >= startDate && schDate <= endDate) {
           const schDateStr = Utilities.formatDate(schDate, timeZone, "MM/dd/yyyy");
           const leaveType = scheduleData[i][4] || "Present";
@@ -2445,7 +2583,7 @@ function getMySchedule(userEmail) {
     if (targetEmails.has(schEmail)) {
       try {
         // *** MODIFIED: Read Date from Col B (index 1) ***
-        const schDate = new Date(row[1]); 
+        const schDate = parseDate(row[1]);
         if (schDate >= today && schDate < nextSevenDays) { 
           
           // *** MODIFIED: Read times/leave from Col C, E, F ***
@@ -2595,16 +2733,16 @@ function importScheduleCSV(adminEmail, csvData) {
         endTime = "";
       }
 
-      const targetStartDate = new Date(startDateStr);
-      if (isNaN(targetStartDate.getTime())) {
+      const targetStartDate = parseDate(startDateStr);
+if (!targetStartDate || isNaN(targetStartDate.getTime())) {
         throw new Error(`Invalid StartDate format: ${startDateStr}. Use MM/dd/yyyy`);
       }
       
       // *** MODIFIED: Handle optional EndDate ***
       let targetEndDate = null;
       if (leaveType.toLowerCase() === "present" && endDateStr) {
-        targetEndDate = new Date(endDateStr);
-        if (isNaN(targetEndDate.getTime())) {
+        targetEndDate = parseDate(endDateStr);
+if (!targetEndDate || isNaN(targetEndDate.getTime())) {
           throw new Error(`Invalid EndDate format: ${endDateStr}. Use MM/dd/yyyy`);
         }
       } else {
@@ -3641,20 +3779,22 @@ function monthlyLeaveAccrual() {
  */
 function parseDate(dateStr) {
   if (!dateStr) return null;
-  if (dateStr instanceof Date) return dateStr; // Already a date
+  if (dateStr instanceof Date) return dateStr;
+// Already a date
   
   try {
-    // Check for dd/MM/yyyy format
+    // Check for MM/dd/yyyy format (to match sheet format)
     if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
       const parts = dateStr.split('/');
-      // Note: new Date(year, monthIndex, day)
-      const newDate = new Date(parts[2], parts[1] - 1, parts[0]);
-      if (!isNaN(newDate.getTime())) return newDate;
+// Note: new Date(year, monthIndex, day)
+      // This is MM/dd/yyyy
+      const newDate = new Date(parts[2], parts[0] - 1, parts[1]);
+if (!isNaN(newDate.getTime())) return newDate;
     }
     
-    // Try standard parsing for ISO (yyyy-MM-dd) or American (MM/dd/yyyy)
+    // Try standard parsing for ISO (yyyy-MM-dd)
     const newDate = new Date(dateStr);
-    if (!isNaN(newDate.getTime())) return newDate;
+if (!isNaN(newDate.getTime())) return newDate;
     
     return null; // Invalid date
   } catch(e) {
