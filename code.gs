@@ -1580,7 +1580,6 @@ function getUserDataFromDb(dbSheet) {
   const emailToAccountStatus = {};
   const emailToHiringDate = {}; // *** NEW ***
   const userList = [];
-
   for (let i = 1; i < dbData.length; i++) {
     // *** MODIFIED: Read 9 columns ***
     let [name, email, role, annual, sick, casual, supervisor, accountStatus, hiringDate] = dbData[i];
@@ -1590,7 +1589,9 @@ function getUserDataFromDb(dbSheet) {
       const userRole = (role || 'agent').toString().trim().toLowerCase(); 
       const supervisorEmail = (supervisor || "").toString().trim().toLowerCase(); 
       const userAccountStatus = (accountStatus || "Pending").toString().trim();
-      const hiringDateObj = hiringDate ? new Date(hiringDate) : null; // *** NEW ***
+      
+      // *** THIS IS THE FIX: Use the robust parseDate function ***
+      const hiringDateObj = parseDate(hiringDate); 
       
       nameToEmail[cleanName] = cleanEmail;
       emailToName[cleanEmail] = cleanName;
@@ -1598,14 +1599,14 @@ function getUserDataFromDb(dbSheet) {
       emailToRow[cleanEmail] = i + 1; 
       emailToSupervisor[cleanEmail] = supervisorEmail; 
       emailToAccountStatus[cleanEmail] = userAccountStatus;
-      emailToHiringDate[cleanEmail] = hiringDateObj; // *** NEW ***
+      emailToHiringDate[cleanEmail] = hiringDateObj;
+      // *** NEW ***
       
       emailToBalances[cleanEmail] = {
         annual: parseFloat(annual) || 0,
         sick: parseFloat(sick) || 0,
         casual: parseFloat(casual) || 0
       };
-      
       userList.push({ 
         name: cleanName, 
         email: cleanEmail, 
@@ -3633,4 +3634,30 @@ function monthlyLeaveAccrual() {
     }
   }
   Logger.log("Finished monthlyLeaveAccrual trigger.");
+}
+
+/**
+ * NEW: Robustly parses a date string, handling dd/MM/yyyy.
+ */
+function parseDate(dateStr) {
+  if (!dateStr) return null;
+  if (dateStr instanceof Date) return dateStr; // Already a date
+  
+  try {
+    // Check for dd/MM/yyyy format
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+      const parts = dateStr.split('/');
+      // Note: new Date(year, monthIndex, day)
+      const newDate = new Date(parts[2], parts[1] - 1, parts[0]);
+      if (!isNaN(newDate.getTime())) return newDate;
+    }
+    
+    // Try standard parsing for ISO (yyyy-MM-dd) or American (MM/dd/yyyy)
+    const newDate = new Date(dateStr);
+    if (!isNaN(newDate.getTime())) return newDate;
+    
+    return null; // Invalid date
+  } catch(e) {
+    return null;
+  }
 }
