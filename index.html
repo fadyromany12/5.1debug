@@ -1504,6 +1504,15 @@
          }
        }
 
+       /* --- Add this rule anywhere inside your <style> tag --- */
+      button:disabled {
+        background-color: var(--text-color-secondary);
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+
     </style>
   </head>
   <body>
@@ -2058,6 +2067,8 @@
 
 
     <script>
+      const PLANNED_BREAK_SECONDS = 15 * 60; // 15 minutes
+      const PLANNED_LUNCH_SECONDS = 30 * 60; // 30 minutes
       let selfUserName = ""; 
       let selfRole = "agent"; 
       let allUsersList = []; 
@@ -2164,7 +2175,12 @@
             statusDiv.classList.remove('visible', 'success', 'error', 'processing');
         }
       }
-      
+      // *** NEW HELPER FUNCTION to add in <script> tag ***
+      function setAllPunchButtonsDisabled(disabled) {
+        document.querySelectorAll('#buttons button, #other-buttons button').forEach(btn => {
+          btn.disabled = disabled;
+        });
+      }
       // === TAB SWITCHING FUNCTION ===
       function showTab(tabName) {
         // Hide all panels
@@ -2696,8 +2712,11 @@ function submitSchedule() {
       // --- NEW: Dynamic Status Timer ---
       let statusTimer = null;
 
-      /**
-       * Updates the new #current-status-display with live elapsed time.
+/**
+       * (REPLACE THIS FUNCTION in your <script> tag)
+       * Updates the new #current-status-display with live elapsed time
+       * AND manages the enabled/disabled state of punch buttons.
+       * *** NOW INCLUDES EXCEED WARNINGS ***
        */
       function updateCurrentStatus(statusInfo) {
         if (statusTimer) {
@@ -2705,9 +2724,15 @@ function submitSchedule() {
         }
 
         const displayDiv = document.getElementById('current-status-display');
+        
+        // --- Button State Logic ---
+        setAllPunchButtonsDisabled(true); // Disable all by default
+
         if (!statusInfo || !statusInfo.status || statusInfo.status === 'Logged Out') {
           displayDiv.style.visibility = 'hidden';
-          return;
+          // 1. Logged Out State: Only Login is enabled
+          document.querySelector('button[onclick="punch(\'Login\')"]').disabled = false;
+          return; // Stop here
         }
 
         const punchTime = new Date(statusInfo.time);
@@ -2729,19 +2754,74 @@ function submitSchedule() {
           }
 
           let statusClass = getStatusClass(statusInfo.status);
-          // Use status-login style for "Logged In"
           if (statusInfo.status === 'Logged In') statusClass = 'Logged-In'; 
 
           displayDiv.className = `status-message visible status-${statusClass}`;
           displayDiv.style.visibility = 'visible';
+          
+          // --- NEW: Exceed Warning Logic ---
+          let exceedWarning = "";
+          let plannedSeconds = 0;
+          
+          if (statusInfo.status === 'On First Break' || statusInfo.status === 'On Last Break') {
+            plannedSeconds = PLANNED_BREAK_SECONDS;
+          } else if (statusInfo.status === 'On Lunch') {
+            plannedSeconds = PLANNED_LUNCH_SECONDS;
+          }
+          
+          if (plannedSeconds > 0 && diffSec > plannedSeconds) {
+            const exceededSeconds = diffSec - plannedSeconds;
+            const ex_m = Math.floor(exceededSeconds / 60);
+            const ex_s = exceededSeconds % 60;
+            // Use the CSS variable for "leave" text color (red)
+            exceedWarning = ` <strong style="color: var(--status-leave-text);">(Exceeded by ${ex_m}m ${ex_s}s)</strong>`;
+            
+            // Make the whole status box flash red if exceeded
+            displayDiv.className = `status-message visible status-leave`;
+          }
+          // --- END NEW ---
+
           displayDiv.innerHTML = `
             <strong>${statusInfo.status}</strong> 
-            (since ${formatTime(statusInfo.time)} - ${elapsedStr})
+            (since ${formatTime(statusInfo.time)} - ${elapsedStr})${exceedWarning}
           `;
         };
 
         updateText(); // Run once immediately
         statusTimer = setInterval(updateText, 1000); // Update every second
+
+        // --- Button State Logic (continued) ---
+        if (statusInfo.status === 'Logged In') {
+          // 2. Logged In State: Enable everything *except* Login
+          setAllPunchButtonsDisabled(false);
+          document.querySelector('button[onclick="punch(\'Login\')"]').disabled = true;
+        
+        } else if (statusInfo.status.startsWith('On ')) {
+          // 3. "On Break/Lunch/Coaching" State: Only enable the matching "Out" button
+          setAllPunchButtonsDisabled(true); // All are disabled...
+          
+          const statusType = statusInfo.status.replace('On ', ''); // "First Break", "Lunch", "Coaching"
+          
+          // Find the matching "Out" button
+          let matchingButton = null;
+          if (statusType === 'First Break') {
+            matchingButton = document.querySelector('button[onclick="punch(\'First Break Out\')"]');
+          } else if (statusType === 'Lunch') {
+            matchingButton = document.querySelector('button[onclick="punch(\'Lunch Out\')"]');
+          } else if (statusType === 'Last Break') {
+            matchingButton = document.querySelector('button[onclick="punch(\'Last Break Out\')"]');
+          } else if (statusType === 'Coaching') {
+            matchingButton = document.querySelector('button[onclick="punch(\'Coaching Out\')"]');
+          } else if (statusType === 'Meeting') {
+            matchingButton = document.querySelector('button[onclick="punch(\'Meeting Out\')"]');
+          } else if (statusType === 'Personal') {
+            matchingButton = document.querySelector('button[onclick="punch(\'Personal Out\')"]');
+          }
+
+          if (matchingButton) {
+            matchingButton.disabled = false; // ...except the one that gets you out.
+          }
+        }
       }
 
       /**
