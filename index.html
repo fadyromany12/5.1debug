@@ -1573,6 +1573,10 @@
 
           <div id="agent-info">Loading user info...</div> 
           <div id="admin-panel"><label for="agent-select">Punch For:</label><select id="agent-select"></select></div>
+
+          <div id="current-status-display" class="status-message" style="visibility: hidden; text-align: left; font-size: 1.1rem; border-left-width: 5px; margin-top: 0; margin-bottom: 20px;">
+            </div>
+          <div id="status" class="status-message"></div>
           <div id="buttons">
             <div class="button-group"><button onclick="punch('Login')">Login</button></div>
             <div class="button-group"><button onclick="punch('First Break In')">1st Break In</button><button onclick="punch('First Break Out')">1st Break Out</button></div>
@@ -1585,8 +1589,7 @@
             <div class="button-group"><button onclick="punch('Meeting In')">Meeting In</button><button onclick="punch('Meeting Out')">Meeting Out</button></div>
              <div class="button-group"><button onclick="punch('Personal In')">Personal In</button><button onclick="punch('Personal Out')">Personal Out</button></div>
           </div>
-          <div id="status" class="status-message"></div>
-        </div>
+          </div>
 
         <!-- ================================== -->
         <!--      TAB 2: MY SCHEDULE PANEL      -->
@@ -1684,7 +1687,7 @@
               <div class="form-group"><label for="schedule-start-date">Start Date</label><input type="date" id="schedule-start-date" required></div>
               <div class="form-group"><label for="schedule-end-date">End Date (Optional)</label><input type="date" id="schedule-end-date"><small>Leave blank to submit for a single day.</small></div>
             </div>
-            <div class="form-group"><label for="schedule-leave-type">Leave Type / Status</label><select id="schedule-leave-type" onchange="toggleTimeFields()"><option value="Present">Present</option><option value="Sick">Sick</option><option value="Annual">Annual</option><option value="Casual">Casual</option><option value="Absent">Absent</option></select></div>
+            <div class="form-group"><label for="schedule-leave-type">Leave Type / Status</label><select id="schedule-leave-type" onchange="toggleTimeFields()"><option value="Present">Present</option><option value="Sick">Sick</option><option value="Annual">Annual</option><option value="Casual">Casual</option><option value="Absent">Absent</option><option value="Day Off">Day Off</option></select></div>
             
             <div id="time-fields" class="form-row">
               <div class="form-group">
@@ -2309,6 +2312,7 @@
         // *** END OF BLOCK ***
         
         if (user.myBalances) populateMyBalances(user.myBalances);
+        if (user.currentStatus) updateCurrentStatus(user.currentStatus);
 
         // --- Show/Hide Tabs Based on Role ---
         if (user.role === 'admin' || user.role === 'superadmin') {
@@ -2543,12 +2547,16 @@
         setStatus('status', 'processing', `Processing "${action}" for ${targetUserName}...`);
 
         google.script.run
-          .withSuccessHandler(msg => {
-            if (msg.startsWith('Error:')) {
-              setStatus('status', 'error', msg.replace('Error: ', ''));
+          .withSuccessHandler(response => { // <-- 'msg' is now 'response'
+            // 'response' is now an object { message: "...", newStatus: {...} }
+            if (response.message.startsWith('Error:')) {
+              setStatus('status', 'error', response.message.replace('Error: ', ''));
             } else {
-              setStatus('status', 'success', msg);
+              setStatus('status', 'success', response.message);
             }
+            // --- ADD THIS LINE ---
+            updateCurrentStatus(response.newStatus); 
+            // --- END ADDITION ---
           })
           .withFailureHandler(err => {
             setStatus('status', 'error', 'Unexpected error: ' + (err.message || JSON.stringify(err)));
@@ -2662,6 +2670,105 @@ function submitSchedule() {
         if (s > 0 || (h === 0 && m === 0)) str += `${s}s`;
         
         return str.trim();
+      }
+
+      // --- NEW: Dynamic Status Timer ---
+      let statusTimer = null;
+
+      /**
+       * Updates the new #current-status-display with live elapsed time.
+       */
+      function updateCurrentStatus(statusInfo) {
+        if (statusTimer) {
+          clearInterval(statusTimer); // Stop any existing timer
+        }
+
+        const displayDiv = document.getElementById('current-status-display');
+        if (!statusInfo || !statusInfo.status || statusInfo.status === 'Logged Out') {
+          displayDiv.style.visibility = 'hidden';
+          return;
+        }
+
+        const punchTime = new Date(statusInfo.time);
+        
+        const updateText = () => {
+          const now = new Date();
+          const diffMs = now.getTime() - punchTime.getTime();
+          const diffSec = Math.floor(diffMs / 1000);
+          
+          let elapsedStr = '';
+          if (diffSec < 60) {
+            elapsedStr = `${diffSec}s ago`;
+          } else if (diffSec < 3600) {
+            elapsedStr = `${Math.floor(diffSec / 60)}m ${diffSec % 60}s ago`;
+          } else {
+            const h = Math.floor(diffSec / 3600);
+            const m = Math.floor((diffSec % 3600) / 60);
+            elapsedStr = `${h}h ${m}m ago`;
+          }
+
+          let statusClass = getStatusClass(statusInfo.status);
+          // Use status-login style for "Logged In"
+          if (statusInfo.status === 'Logged In') statusClass = 'Logged-In'; 
+
+          displayDiv.className = `status-message visible status-${statusClass}`;
+          displayDiv.style.visibility = 'visible';
+          displayDiv.innerHTML = `
+            <strong>${statusInfo.status}</strong> 
+            (since ${formatTime(statusInfo.time)} - ${elapsedStr})
+          `;
+        };
+
+        updateText(); // Run once immediately
+        statusTimer = setInterval(updateText, 1000); // Update every second
+      }
+
+      /**
+       * Updates the new #current-status-display with live elapsed time.
+       */
+      function updateCurrentStatus(statusInfo) {
+        if (statusTimer) {
+          clearInterval(statusTimer); // Stop any existing timer
+        }
+
+        const displayDiv = document.getElementById('current-status-display');
+        if (!statusInfo || !statusInfo.status || statusInfo.status === 'Logged Out') {
+          displayDiv.style.visibility = 'hidden';
+          return;
+        }
+
+        const punchTime = new Date(statusInfo.time);
+        
+        const updateText = () => {
+          const now = new Date();
+          const diffMs = now.getTime() - punchTime.getTime();
+          const diffSec = Math.floor(diffMs / 1000);
+          
+          let elapsedStr = '';
+          if (diffSec < 60) {
+            elapsedStr = `${diffSec}s ago`;
+          } else if (diffSec < 3600) {
+            elapsedStr = `${Math.floor(diffSec / 60)}m ${diffSec % 60}s ago`;
+          } else {
+            const h = Math.floor(diffSec / 3600);
+            const m = Math.floor((diffSec % 3600) / 60);
+            elapsedStr = `${h}h ${m}m ago`;
+          }
+
+          let statusClass = getStatusClass(statusInfo.status);
+          // Use status-login style for "Logged In"
+          if (statusInfo.status === 'Logged In') statusClass = 'Logged-In'; 
+
+          displayDiv.className = `status-message visible status-${statusClass}`;
+          displayDiv.style.visibility = 'visible';
+          displayDiv.innerHTML = `
+            <strong>${statusInfo.status}</strong> 
+            (since ${formatTime(statusInfo.time)} - ${elapsedStr})
+          `;
+        };
+
+        updateText(); // Run once immediately
+        statusTimer = setInterval(updateText, 1000); // Update every second
       }
       
       // REPLACE this function in your <script> tag
@@ -5070,6 +5177,10 @@ function populateHistoryReport(data) {
             
             setStatus('registration-admin-status', 'success', `Loaded ${requests.length} pending requests.`);
             let html = '';
+            
+            // --- ADD THIS LINE ---
+            const todayDateStr = new Date().toISOString().split('T')[0];
+
             requests.forEach(req => {
               html += `
                 <div class="request-list-item">
@@ -5078,10 +5189,15 @@ function populateHistoryReport(data) {
                     <p><strong>Email:</strong> ${req.userEmail}</p>
                     <p><strong>Selected Supervisor:</strong> ${req.supervisorName}</p>
                     <p class="text-color-secondary"><strong>Submitted:</strong> ${formatDate(req.timestamp)}</p>
-                  </div>
+                    
+                    <div class="form-group" style="margin: 15px 0 0 0;">
+                      <label for="hiring-date-${req.requestID}" style="font-weight: 600;">Hiring Date:</label>
+                      <input type="date" id="hiring-date-${req.requestID}" value="${todayDateStr}" style="padding: 8px; background-color: var(--card-bg);">
+                    </div>
+                    </div>
                   <div class="item-actions">
-                    <button class="approve-btn" onclick="approveDenyRegistration('${req.requestID}', '${req.userEmail}', '${req.selectedSupervisorEmail}', 'Approved')">Approve</button>
-                    <button class="deny-btn" onclick="approveDenyRegistration('${req.requestID}', '${req.userEmail}', '${req.selectedSupervisorEmail}', 'Denied')">Deny</button>
+                    <button class="approve-btn" onclick="approveDenyRegistration('${req.requestID}', '${req.userEmail}', '${req.selectedSupervisorEmail}', 'Approved', 'hiring-date-${req.requestID}')">Approve</button>
+                    <button class="deny-btn" onclick="approveDenyRegistration('${req.requestID}', '${req.userEmail}', '${req.selectedSupervisorEmail}', 'Denied', null)">Deny</button>
                   </div>
                 </div>
               `;
@@ -5095,8 +5211,9 @@ function populateHistoryReport(data) {
       }
 
       // REPLACE this function in your <script> tag
-function approveDenyRegistration(requestID, userEmail, supervisorEmail, newStatus) {
+function approveDenyRegistration(requestID, userEmail, supervisorEmail, newStatus, dateInputId) { // <-- Added dateInputId
   
+  // This is the backend call. It's the same.
   const runAction = (hiringDateStr) => {
     setStatus('registration-admin-status', 'processing', `Processing ${newStatus} for ${userEmail}...`);
 
@@ -5113,25 +5230,25 @@ function approveDenyRegistration(requestID, userEmail, supervisorEmail, newStatu
         setStatus('registration-admin-status', 'error', err.message);
       })
       // *** MODIFIED: Pass hiringDateStr ***
-      .webApproveDenyRegistration(requestID, userEmail, supervisorEmail, newStatus, hiringDateStr); 
+      .webApproveDenyRegistration(requestID, userEmail, supervisorEmail, newStatus, hiringDateStr);
   };
 
   if (newStatus === 'Approved') {
-    // *** NEW: Prompt for hiring date ***
-    const defaultDate = new Date().toISOString().split('T')[0];
-    const hiringDateStr = prompt(`To approve ${userEmail}, please enter their Hiring Date:`, defaultDate);
+    // *** MODIFIED: Read from calendar, remove prompt ***
+    const hiringDateStr = document.getElementById(dateInputId).value;
     
     if (!hiringDateStr) {
-      return; // User clicked cancel
+      setStatus('registration-admin-status', 'error', 'Please select a Hiring Date from the calendar.');
+      return; // User clicked approve without a date
     }
     
-    // Simple validation
+    // Simple validation (can be removed if not needed, as <input type="date"> is robust)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(hiringDateStr) || isNaN(new Date(hiringDateStr).getTime())) {
       setStatus('registration-admin-status', 'error', 'Invalid date format. Please use YYYY-MM-DD.');
       return;
     }
     
-    // Show confirmation *after* getting date
+    // Show confirmation
     showCustomConfirm(
       `Are you sure you want to APPROVE ${userEmail} with hiring date ${hiringDateStr}?`,
       'Approve User',
@@ -5140,7 +5257,7 @@ function approveDenyRegistration(requestID, userEmail, supervisorEmail, newStatu
     );
     
   } else {
-    // Denying, no date needed
+    // Denying, no date needed, logic is unchanged
     showCustomConfirm(
       `Are you sure you want to DENY ${userEmail}? They will be prompted to re-select a supervisor.`,
       'Deny User',
