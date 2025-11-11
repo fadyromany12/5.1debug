@@ -1220,7 +1220,7 @@ break;
   }
 }
 
-// REPLACE this function
+// REPLACE this function in your code.gs file
 // ================= PUNCH MAIN FUNCTION =================
 function punch(action, targetUserName, puncherEmail, adminTimestamp) { 
   const ss = getSpreadsheet();
@@ -1271,17 +1271,15 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
 
   // === 5. PROCEED WITH ADHERENCE PUNCH ===
   const scheduleData = scheduleSheet.getDataRange().getValues();
-  
   // *** MODIFIED for 7-column layout ***
   let schName, schStartDate, schStartTime, schEndDate, schEndTime, schLeave, schEmail;
   let shiftStartStr = "", shiftEndStr = "", leaveType = "";
-  let shiftStartDateObj = null, shiftEndDateObj = null; 
+  let shiftStartDateObj = null, shiftEndDateObj = null;
   let foundSchedule = false;
 
   for (let i = 1; i < scheduleData.length; i++) {
     // Read all 7 columns
     [schName, schStartDate, schStartTime, schEndDate, schEndTime, schLeave, schEmail] = scheduleData[i];
-    
     const dateObj = parseDate(schStartDate); // Use StartDate (Col B) for matching
     if (!dateObj || isNaN(dateObj.getTime())) continue;
     const dateStr = Utilities.formatDate(dateObj, timeZone, "MM/dd/yyyy");
@@ -1305,7 +1303,6 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
           
       // Get Leave Type (Col F, index 5)
       leaveType = (schLeave || "").toString().trim();
-
       // *** NEW: Build full shift start/end Date objects ***
       if (shiftStartStr) {
         shiftStartDateObj = createDateTime(new Date(schStartDate), shiftStartStr);
@@ -1350,7 +1347,6 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   // If we are here, LeaveType is "Present"
   const row = findOrCreateRow(adherenceSheet, userName, shiftDate, formattedDate); 
   adherenceSheet.getRange(row, 14).setValue("Present");
-
   // --- End of Schedule Read Logic ---
 
   const columns = {
@@ -1360,6 +1356,15 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   const col = columns[action];
   if (!col) throw new Error("Invalid action: " + action);
 
+  // --- START: MODIFICATION FOR REQUEST 1 (Prevent Double "In" Punch) ---
+  const isActionIn = (action === "Login" || action === "First Break In" || action === "Lunch In" || action === "Last Break In");
+  const existingValue = adherenceSheet.getRange(row, col).getValue();
+  
+  if (isActionIn && existingValue) {
+      throw new Error(`Error: "${action}" has already been punched today.`);
+  }
+  // --- END: MODIFICATION FOR REQUEST 1 ---
+
   const currentPunches = adherenceSheet.getRange(row, 3, 1, 8).getValues()[0];
   const punches = {
     login: currentPunches[0], firstBreakIn: currentPunches[1], firstBreakOut: currentPunches[2],
@@ -1367,6 +1372,7 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     lastBreakOut: currentPunches[6], logout: currentPunches[7]
   };
   
+  // This block now only checks for sequential errors for non-admins
   if (!isAdmin) {
     if (action !== "Login" && !punches.login) {
       throw new Error("You must 'Login' first.");
@@ -1379,8 +1385,8 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     if (sequentialErrors[action] && !sequentialErrors[action].required) {
       throw new Error(sequentialErrors[action].msg);
     }
-    const existingValue = adherenceSheet.getRange(row, col).getValue();
-    if (existingValue) {
+    // Double-punch check for "Out" actions ("In" actions are checked above for all users)
+    if (!isActionIn && existingValue) {
       throw new Error(`"${action}" already punched today.`);
     }
   }
@@ -1393,11 +1399,22 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
   // === SAVE PUNCH ===
   adherenceSheet.getRange(row, col).setValue(nowTimestamp);
   logsSheet.appendRow([new Date(), userName, userEmail, action, nowTimestamp]);
-  
-  const actionKey = Object.keys(columns).find(key => columns[key] === col);
-  if (actionKey) {
-    punches[actionKey.replace(/\s+/g, '').replace('1st', 'first').replace('Out', 'Out').replace('In', 'In').toLowerCase()] = nowTimestamp;
+
+  // --- START: MODIFICATION FOR REQUEST 2 (Fix Exceeding Bug) ---
+  // Replaced the buggy actionKey logic with this switch statement.
+  // This correctly updates the local 'punches' object with the new Date object,
+  // which is required for the exceed calculations to run immediately.
+  switch(action) {
+    case "Login": punches.login = nowTimestamp; break;
+    case "First Break In": punches.firstBreakIn = nowTimestamp; break;
+    case "First Break Out": punches.firstBreakOut = nowTimestamp; break;
+    case "Lunch In": punches.lunchIn = nowTimestamp; break;
+    case "Lunch Out": punches.lunchOut = nowTimestamp; break;
+    case "Last Break In": punches.lastBreakIn = nowTimestamp; break;
+    case "Last Break Out": punches.lastBreakOut = nowTimestamp; break;
+    case "Logout": punches.logout = nowTimestamp; break;
   }
+  // --- END: MODIFICATION FOR REQUEST 2 ---
 
   // === DATE-AWARE SHIFT METRICS (Now uses objects from step 5) ===
   
@@ -1430,7 +1447,6 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     }
     const logoutTime = (action === "Logout") ? nowTimestamp : punches.logout;
     const diff = timeDiffInSeconds(shiftEndDateObj, logoutTime);
-    
     if (diff > 0) {
       adherenceSheet.getRange(row, 12).setValue(diff);
       adherenceSheet.getRange(row, 13).setValue(0);
@@ -1449,7 +1465,7 @@ function punch(action, targetUserName, puncherEmail, adminTimestamp) {
     diff = duration - PLANNED_BREAK_SECONDS;
     if (diff > 0 && duration > 0) exceedMsg = diff; else exceedMsg = "No";
     adherenceSheet.getRange(row, 17).setValue(exceedMsg);
-
+    
     duration = timeDiffInSeconds(punches.lunchIn, punches.lunchOut);
     diff = duration - PLANNED_LUNCH_SECONDS;
     if (diff > 0 && duration > 0) exceedMsg = diff; else exceedMsg = "No";
@@ -1781,7 +1797,7 @@ function getLatestPunchStatus(userEmail, userName, shiftDate, formattedDate) {
   };
 }
 
-// (No Change)
+// REPLACE this function in your code.gs file
 function logOtherCode(sheet, userName, action, nowTimestamp, adminEmail) { 
   const [code, type] = action.split(" ");
   const data = sheet.getDataRange().getValues();
@@ -1789,36 +1805,57 @@ function logOtherCode(sheet, userName, action, nowTimestamp, adminEmail) {
   
   const shiftDate = getShiftDate(new Date(nowTimestamp), SHIFT_CUTOFF_HOUR);
   const dateStr = Utilities.formatDate(shiftDate, timeZone, "MM/dd/yyyy");
-  
+
   if (type === "In") {
+    
+    // --- START: MODIFICATION FOR REQUEST 1 (Prevent Double "In" Punch for Other Codes) ---
+    // This check applies to EVERYONE, including admins using the main punch button.
+    let alreadyPunchedIn = false;
+    for (let i = data.length - 1; i > 0; i--) {
+        const [rowDateRaw, rowName, rowCode, rowIn] = data[i];
+        if (!rowDateRaw || !rowName || !rowIn) continue; // Skip rows without an "In" punch
+        
+        const rowShiftDate = getShiftDate(new Date(rowDateRaw), SHIFT_CUTOFF_HOUR);
+        const rowDateStr = Utilities.formatDate(rowShiftDate, timeZone, "MM/dd/yyyy");
+
+        if (rowName === userName && rowDateStr === dateStr && rowCode === code) {
+            // Found an "In" punch for this code, user, and date.
+            alreadyPunchedIn = true;
+            break;
+        }
+    }
+    if (alreadyPunchedIn) {
+        throw new Error(`Error: "${action}" has already been punched today.`);
+    }
+    // --- END: MODIFICATION FOR REQUEST 1 ---
+
     if (adminEmail) { 
        sheet.appendRow([nowTimestamp, userName, code, nowTimestamp, "", "", adminEmail]);
        return `${userName}: ${action} recorded at ${Utilities.formatDate(nowTimestamp, timeZone, "HH:mm:ss")}.`;
     }
     
+    // This loop now only checks for sequential errors (In without Out) for non-admins
     for (let i = data.length - 1; i > 0; i--) {
       const [rowDateRaw, rowName, rowCode, rowIn, rowOut] = data[i];
       if (!rowDateRaw || !rowName) continue;
       
       const rowShiftDate = getShiftDate(new Date(rowDateRaw), SHIFT_CUTOFF_HOUR);
       const rowDateStr = Utilities.formatDate(rowShiftDate, timeZone, "MM/dd/yyyy");
-      
       if (rowName === userName && rowDateStr === dateStr && rowCode === code && rowIn && !rowOut) { 
         throw new Error(`You must punch "${code} Out" before punching "In" again.`);
       }
     }
-    sheet.appendRow([nowTimestamp, userName, code, nowTimestamp, "", "", adminEmail || ""]); 
+    sheet.appendRow([nowTimestamp, userName, code, nowTimestamp, "", "", adminEmail || ""]);
+
   } else if (type === "Out") {
     let matchingInPunch = null;
     let matchingInRow = -1;
-    
     for (let i = data.length - 1; i > 0; i--) {
       const [rowDateRaw, rowName, rowCode, rowIn, rowOut] = data[i];
       if (!rowDateRaw || !rowName || !rowIn) continue;
       
       const rowShiftDate = getShiftDate(new Date(rowDateRaw), SHIFT_CUTOFF_HOUR);
       const rowDateStr = Utilities.formatDate(rowShiftDate, timeZone, "MM/dd/yyyy");
-      
       if (rowName === userName && rowDateStr === dateStr && rowCode === code && rowIn && !rowOut) { 
         matchingInPunch = rowIn; // This is a Date object
         matchingInRow = i + 1;
