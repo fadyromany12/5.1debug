@@ -1613,47 +1613,62 @@ function getUserDataFromDb(dbSheet) {
   const emailToAccountStatus = {};
   const emailToHiringDate = {}; // *** NEW ***
   const userList = [];
+  
   for (let i = 1; i < dbData.length; i++) {
-    // *** MODIFIED: Read 9 columns ***
-    let [name, email, role, annual, sick, casual, supervisor, accountStatus, hiringDate] = dbData[i];
-    if (name && email) {
-      const cleanName = name.toString().trim();
-      const cleanEmail = email.toString().trim().toLowerCase();
-      const userRole = (role || 'agent').toString().trim().toLowerCase(); 
-      const supervisorEmail = (supervisor || "").toString().trim().toLowerCase(); 
-      const userAccountStatus = (accountStatus || "Pending").toString().trim();
+    // --- START: Fix 1 (Catch invalid data) ---
+    try {
+    // --- END: Fix 1 ---
+
+      let [name, email, role, annual, sick, casual, supervisor, accountStatus, hiringDate] = dbData[i];
       
-      // *** THIS IS THE FIX: Use the robust parseDate function ***
-      const hiringDateObj = parseDate(hiringDate); 
-      
-      nameToEmail[cleanName] = cleanEmail;
-      emailToName[cleanEmail] = cleanName;
-      emailToRole[cleanEmail] = userRole; 
-      emailToRow[cleanEmail] = i + 1; 
-      emailToSupervisor[cleanEmail] = supervisorEmail; 
-      emailToAccountStatus[cleanEmail] = userAccountStatus;
-      emailToHiringDate[cleanEmail] = hiringDateObj;
-      // *** NEW ***
-      
-      emailToBalances[cleanEmail] = {
-        annual: parseFloat(annual) || 0,
-        sick: parseFloat(sick) || 0,
-        casual: parseFloat(casual) || 0
-      };
-      userList.push({ 
-        name: cleanName, 
-        email: cleanEmail, 
-        role: userRole,
-        balances: emailToBalances[cleanEmail],
-        supervisor: supervisorEmail,
-        accountStatus: userAccountStatus,
-        hiringDate: hiringDateObj // *** NEW ***
-      });
+      if (name && email) {
+        const cleanName = name.toString().trim();
+        const cleanEmail = email.toString().trim().toLowerCase();
+        const userRole = (role || 'agent').toString().trim().toLowerCase(); 
+        const supervisorEmail = (supervisor || "").toString().trim().toLowerCase(); 
+        const userAccountStatus = (accountStatus || "Pending").toString().trim();
+        
+        const hiringDateObj = parseDate(hiringDate);
+        
+        nameToEmail[cleanName] = cleanEmail;
+        emailToName[cleanEmail] = cleanName;
+        emailToRole[cleanEmail] = userRole; 
+        emailToRow[cleanEmail] = i + 1; 
+        emailToSupervisor[cleanEmail] = supervisorEmail; 
+        emailToAccountStatus[cleanEmail] = userAccountStatus;
+
+        // --- START: Fix 2 (Convert Date to String) ---
+        const hiringDateStr = convertDateToString(hiringDateObj);
+        emailToHiringDate[cleanEmail] = hiringDateStr;
+        // --- END: Fix 2 ---
+        
+        emailToBalances[cleanEmail] = {
+          annual: parseFloat(annual) || 0,
+          sick: parseFloat(sick) || 0,
+          casual: parseFloat(casual) || 0
+        };
+        
+        userList.push({ 
+          name: cleanName, 
+          email: cleanEmail, 
+          role: userRole,
+          balances: emailToBalances[cleanEmail],
+          supervisor: supervisorEmail,
+          accountStatus: userAccountStatus,
+          hiringDate: hiringDateStr // --- Fix 2: Use the string version ---
+        });
+      }
+
+    // --- START: Fix 1 (Catch invalid data) ---
+    } catch (e) {
+      // If one row fails (e.g., bad date), log it and continue to the next row
+      Logger.log(`Failed to process row ${i + 1} in Data Base. Error: ${e.message}`);
     }
+    // --- END: Fix 1 ---
   }
+  
   userList.sort((a, b) => a.name.localeCompare(b.name)); 
   
-  // *** MODIFIED: Added emailToHiringDate ***
   return { 
     nameToEmail, emailToName, emailToRole, emailToBalances, 
     emailToRow, emailToSupervisor, emailToAccountStatus, 
@@ -3779,23 +3794,22 @@ function monthlyLeaveAccrual() {
  */
 function parseDate(dateStr) {
   if (!dateStr) return null;
-  if (dateStr instanceof Date) return dateStr;
-// Already a date
-  
+  if (dateStr instanceof Date) return dateStr; // Already a date
+
   try {
     // Check for MM/dd/yyyy format (to match sheet format)
     if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
       const parts = dateStr.split('/');
-// Note: new Date(year, monthIndex, day)
+      // Note: new Date(year, monthIndex, day)
       // This is MM/dd/yyyy
       const newDate = new Date(parts[2], parts[0] - 1, parts[1]);
-if (!isNaN(newDate.getTime())) return newDate;
+      if (!isNaN(newDate.getTime())) return newDate;
     }
-    
+
     // Try standard parsing for ISO (yyyy-MM-dd)
     const newDate = new Date(dateStr);
-if (!isNaN(newDate.getTime())) return newDate;
-    
+    if (!isNaN(newDate.getTime())) return newDate;
+
     return null; // Invalid date
   } catch(e) {
     return null;
