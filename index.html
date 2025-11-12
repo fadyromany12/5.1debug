@@ -1690,14 +1690,16 @@
             <p class="text-color-secondary" style="text-align: left; max-width: 600px; margin: 0 auto 15px auto; padding: 10px; background-color: var(--page-bg); border-radius: 8px;">
               <strong>Upload a CSV with the following headers:</strong>
               <br>
-              <code>Name</code>, <code>Email</code>, <code>StartDate</code>, <code>StartTime</code>, <code>EndDate</code>, <code>EndTime</code>, <code>LeaveType</code>
+              <code>Name</code>, <code>StartDate</code>, <code>ShiftStartTime</code>, <code>EndDate</code>, <code>ShiftEndTime</code>, <code>LeaveType</code>, <code>agent email</code>
               <br><br>
               <ul style="margin: 0 0 0 20px; padding: 0; font-size: 0.9rem;">
+                <li><strong><code>Name</code> (Required):</strong> The user's full name.</li>
                 <li><strong><code>StartDate</code> (Required):</strong> Date of the shift (format: MM/dd/yyyy).</li>
-                <li><strong><code>Email</code> (Required):</strong> The user's unique email address.</li>
+                <li><strong><code>ShiftStartTime</code>:</strong> Required if <code>LeaveType</code> is "Present" (format: HH:mm).</li>
+                <li><strong><code>EndDate</code> (Optional):</strong> Only fill this if the shift ends on a different calendar day (e.g., for an overnight shift).</li>
+                <li><strong><code>ShiftEndTime</code>:</strong> Required if <code>LeaveType</code> is "Present" (format: HH:mm).</li>
                 <li><strong><code>LeaveType</code>:</strong> Use "Present" for a work day. For any other value (e.g., "Sick", "Annual", "Day Off"), the times will be ignored.</li>
-                <li><strong><code>StartTime</code> / <code>EndTime</code>:</strong> Required if <code>LeaveType</code> is "Present" (format: HH:mm).</li>
-                <li><strong><code>EndDate</code> (Optional):</strong> Only fill this if the shift ends on a different calendar day (e.g., for an overnight shift). If left blank, it will default to the <code>StartDate</code>.</li>
+                <li><strong><code>agent email</code> (Required):</strong> The user's unique email address.</li>
               </ul>
             </p>
             <button 
@@ -3669,10 +3671,15 @@ function populateHistoryReport(data) {
           }
 
           const headers = data[0];
-          if (!headers.Name || !headers.Date || !headers.Email) {
-            setStatus('csv-import-status', 'error', 'Invalid CSV format. Must include headers: Name, Date, Email. (StartTime, EndTime, LeaveType are optional)');
+          
+          // *** THIS IS THE FIX ***
+          // Now checks for 'agent email' (using bracket notation for the space)
+          // and 'StartDate'
+          if (!headers.Name || !headers.StartDate || !headers['agent email']) {
+            setStatus('csv-import-status', 'error', 'Invalid CSV format. Must include headers: Name, StartDate, and agent email.');
             return;
           }
+          // *** END OF FIX ***
 
           setStatus('csv-import-status', 'processing', `Importing ${data.length} schedule records...`);
 
@@ -3719,13 +3726,13 @@ function populateHistoryReport(data) {
 
       // --- NEW: Function to download the CSV template ---
       function downloadScheduleTemplate() {
-        // These are the exact headers your code.gs file looks for
-        const headers = "Name,Email,StartDate,StartTime,EndDate,EndTime,LeaveType";
+        // *** MODIFIED: Headers match the new 7-column format ***
+        const headers = "Name,StartDate,ShiftStartTime,EndDate,ShiftEndTime,LeaveType,agent email";
         
-        // Add some example rows to guide the user
-        const example1 = "John Doe,john.doe@email.com,11/30/2025,09:00,,18:00,Present";
-        const example2 = "Jane Smith,jane.smith@email.com,11/30/2025,,,,Sick";
-        const example3 = "Peter Jones,peter.jones@email.com,12/01/2025,22:00,12/02/2025,06:00,Present,,,(Overnight shift example)"; // Overnight example
+        // *** MODIFIED: Examples match the new 7-column format ***
+        const example1 = "John Doe,11/30/2025,09:00,11/30/2025,18:00,Present,john.doe@konecta.com";
+        const example2 = "Jane Smith,11/30/2025,,,,Sick,jane.smith@konecta.com";
+        const example3 = "Peter Jones,12/01/2025,22:00,12/02/2025,06:00,Present,peter.jones@konecta.com,,(Overnight shift example)";
         
         // Combine headers and examples, separated by new lines
         const csvContent = [headers, example1, example2, example3].join("\r\n");
