@@ -2757,7 +2757,7 @@ function importScheduleCSV(adminEmail, csvData) {
   const scheduleSheet = getOrCreateSheet(ss, SHEET_NAMES.schedule);
   const scheduleData = scheduleSheet.getDataRange().getValues();
   const logsSheet = getOrCreateSheet(ss, SHEET_NAMES.logs);
-  const timeZone = Session.getScriptTimeZone();
+  const timeZone = Session.getScriptTimeZone(); // *** ADDED: Get timezone ***
   
   // Build a map of existing schedules
   const userScheduleMap = {};
@@ -2771,7 +2771,7 @@ function importScheduleCSV(adminEmail, csvData) {
       }
       const rowDate = new Date(rowDateRaw);
       const rowDateStr = Utilities.formatDate(rowDate, timeZone, "MM/dd/yyyy");
-      userScheduleMap[email][rowDateStr] = i + 1; 
+      userScheduleMap[email][rowDateStr] = i + 1;
     }
   }
   
@@ -2785,51 +2785,53 @@ function importScheduleCSV(adminEmail, csvData) {
       // *** MODIFIED: Read new 7-column CSV headers ***
       const userName = row.Name;
       const userEmail = (row['agent email'] || "").toLowerCase();
-      const startDateStr = row.StartDate; // Expects MM/dd/yyyy
       
-      // *** THESE TWO LINES ARE THE FIX ***
-      let startTime = row.ShiftStartTime || ""; // <-- FIXED (was row.StartTime)
-      const endDateStr = row.EndDate || ""; // Expects MM/dd/yyyy
-      let endTime = row.ShiftEndTime || ""; // <-- FIXED (was row.EndTime)
-      // *** END OF FIX ***
+      // *** MODIFIED: Use new parsers ***
+      const targetStartDate = parseDate(row.StartDate);
+      let startTime = parseCsvTime(row.ShiftStartTime, timeZone);
+      const targetEndDate = parseDate(row.EndDate);
+      let endTime = parseCsvTime(row.ShiftEndTime, timeZone);
+      // *** END MODIFICATION ***
       
       let leaveType = row.LeaveType || "Present";
       
-      if (!userName || !userEmail || !startDateStr) {
-        throw new Error("Missing required field (Name, StartDate, or agent email).");
+      if (!userName || !userEmail) {
+        throw new Error("Missing required field (Name or agent email).");
       }
       
-      // If leave type is not Present, clear times and EndDate
+      // *** MODIFIED: Check parsed date ***
+      if (!targetStartDate || isNaN(targetStartDate.getTime())) {
+        throw new Error(`Invalid or missing StartDate: ${row.StartDate}.`);
+      }
+      
+      // *** NEW: Format startDateStr from parsed date ***
+      const startDateStr = Utilities.formatDate(targetStartDate, timeZone, "MM/dd/yyyy");
+
+      // If leave type is not Present, clear times
       if (leaveType.toLowerCase() !== "present") {
         startTime = "";
         endTime = "";
       }
 
-      const targetStartDate = parseDate(startDateStr);
-      if (!targetStartDate || isNaN(targetStartDate.getTime())) {
-        throw new Error(`Invalid StartDate format: ${startDateStr}. Use MM/dd/yyyy`);
-      }
-      
-      let targetEndDate = null;
-      if (leaveType.toLowerCase() === "present" && endDateStr) {
-        targetEndDate = parseDate(endDateStr);
-        if (!targetEndDate || isNaN(targetEndDate.getTime())) {
-          throw new Error(`Invalid EndDate format: ${endDateStr}. Use MM/dd/yyyy`);
-        }
+      // *** MODIFIED: Handle parsed EndDate ***
+      let finalEndDate;
+      if (leaveType.toLowerCase() === "present" && targetEndDate && !isNaN(targetEndDate.getTime())) {
+        finalEndDate = targetEndDate; // Use the valid, parsed EndDate
       } else {
-        targetEndDate = new Date(targetStartDate);
+        finalEndDate = new Date(targetStartDate); // Default to StartDate
       }
+      // *** END MODIFICATION ***
 
       const emailMap = userScheduleMap[userEmail] || {};
-      
       const result = updateOrAddSingleSchedule(
         scheduleSheet, emailMap, logsSheet,
         userEmail, userName,
-        targetStartDate, // shiftStartDate (Col B)
-        targetEndDate,   // shiftEndDate (Col D)
-        startDateStr,  // targetDateStr (for lookup)
-        startTime, endTime, leaveType, adminEmail
+        targetStartDate, // shiftStartDate (Col B) - Now a Date object
+        finalEndDate,    // shiftEndDate (Col D) - Now a Date object
+        startDateStr,    // targetDateStr (for lookup) - Now a formatted string
+        startTime, endTime, leaveType, adminEmail // Times are now HH:mm:ss strings
       );
+      
       if (result === "UPDATED") daysUpdated++;
       if (result === "CREATED") daysCreated++;
 
@@ -3844,28 +3846,82 @@ function monthlyLeaveAccrual() {
 }
 
 /**
- * NEW: Robustly parses a date string, handling dd/MM/yyyy.
+ * REPLACED: Robustly parses a date from CSV, handling strings, numbers, and Date objects.
  */
-function parseDate(dateStr) {
-  if (!dateStr) return null;
-  if (dateStr instanceof Date) return dateStr; // Already a date
+function parseDate(dateInput) {
+  if (!dateInput) return null;
+  if (dateInput instanceof Date) return dateInput; // Already a date
 
   try {
-    // Check for MM/dd/yyyy format (to match sheet format)
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
-      const parts = dateStr.split('/');
-      // Note: new Date(year, monthIndex, day)
-      // This is MM/dd/yyyy
+    // Check if it's a serial number (e.g., 45576)
+    if (typeof dateInput === 'number' && dateInput > 1) {
+      // Google Sheets/Excel serial date (days since Dec 30, 1899)
+      // Use UTC to avoid timezone issues during calculation.
+      const baseDate = new Date(Date.UTC(1899, 11, 30)); // 1899-12-30 UTC
+      baseDate.setUTCDate(baseDate.getUTCDate() + dateInput);
+      if (!isNaN(baseDate.getTime())) return baseDate;
+    }
+    
+    // Check for MM/dd/yyyy format (common in US CSVs)
+    if (typeof dateInput === 'string' && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateInput)) {
+      const parts = dateInput.split('/');
+      // new Date(year, monthIndex, day)
       const newDate = new Date(parts[2], parts[0] - 1, parts[1]);
       if (!isNaN(newDate.getTime())) return newDate;
     }
 
-    // Try standard parsing for ISO (yyyy-MM-dd)
-    const newDate = new Date(dateStr);
+    // Try standard parsing for ISO (yyyy-MM-dd) or other recognizable formats
+    const newDate = new Date(dateInput);
     if (!isNaN(newDate.getTime())) return newDate;
 
     return null; // Invalid date
   } catch(e) {
     return null;
+  }
+}
+
+/**
+ * NEW: Robustly parses a time from CSV, handling strings and serial numbers (fractions).
+ * Returns a string in HH:mm:ss format.
+ */
+function parseCsvTime(timeInput, timeZone) {
+  if (timeInput === null || timeInput === undefined || timeInput === "") return ""; // Allow empty time
+
+  try {
+    // Check if it's a serial number (e.g., 0.5 for 12:00 PM)
+    if (typeof timeInput === 'number' && timeInput >= 0 && timeInput <= 1) { // 1.0 is 24:00, which is 00:00
+      // Handle edge case 1.0 = 00:00:00
+      if (timeInput === 1) return "00:00:00"; 
+      
+      const totalSeconds = Math.round(timeInput * 86400);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      
+      const hh = String(hours).padStart(2, '0');
+      const mm = String(minutes).padStart(2, '0');
+      const ss = String(seconds).padStart(2, '0');
+      
+      return `${hh}:${mm}:${ss}`;
+    }
+
+    // Check if it's a string (e.g., "12:00" or "12:00:00" or "12:00 PM")
+    if (typeof timeInput === 'string') {
+      // Try parsing as a date (handles "12:00 PM", "12:00", "12:00:00")
+      const dateFromTime = new Date('1970-01-01 ' + timeInput);
+      if (!isNaN(dateFromTime.getTime())) {
+          return Utilities.formatDate(dateFromTime, timeZone, "HH:mm:ss");
+      }
+    }
+    
+    // Check if it's a full Date object (e.g., from a formatted cell)
+    if (timeInput instanceof Date) {
+      return Utilities.formatDate(timeInput, timeZone, "HH:mm:ss");
+    }
+    
+    return ""; // Could not parse
+  } catch(e) {
+    Logger.log(`parseCsvTime Error for input "${timeInput}": ${e.message}`);
+    return ""; // Return empty on error
   }
 }
