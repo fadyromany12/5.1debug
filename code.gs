@@ -1,6 +1,7 @@
 
 // === CONFIGURATION ===
 const SPREADSHEET_ID = "1FotLFASWuFinDnvpyLTsyO51OpJeKWtuG31VFje3Oik"; // Only the ID
+const SICK_NOTE_FOLDER_ID = "1Wu_eoEQ3FmfrzOdAwJkqMu4sPucLRu_0";
 const SHEET_NAMES = {
   adherence: "Adherence Tracker",
   database: "Data Base",
@@ -1941,10 +1942,11 @@ function getOrCreateSheet(ss, name) {
     } else if (name === SHEET_NAMES.otherCodes) { 
       sheet.getRange("A1:G1").setValues([["Date", "User Name", "Code", "Time In", "Time Out", "Duration (Seconds)", "Admin Audit (Email)"]]);
     } else if (name === SHEET_NAMES.leaveRequests) { 
-      sheet.getRange("A1:M1").setValues([[
+      sheet.getRange("A1:N1").setValues([[ // <-- MODIFIED TO N1
         "RequestID", "Status", "RequestedByEmail", "RequestedByName", 
         "LeaveType", "StartDate", "EndDate", "TotalDays", "Reason", 
-        "ActionDate", "ActionBy", "SupervisorEmail", "ActionReason"
+        "ActionDate", "ActionBy", "SupervisorEmail", "ActionReason",
+        "SickNoteURL" // <-- ADDED THIS
       ]]);
       sheet.getRange("F:G").setNumberFormat("mm/dd/yyyy");
       sheet.getRange("J:J").setNumberFormat("mm/dd/yyyy");
@@ -2181,7 +2183,8 @@ function getMyRequests(userEmail) {
           supervisorName: userData.emailToName[supervisorEmail] || supervisorEmail,
           actionDate: convertDateToString(new Date(row[9])), // ActionDate
           actionBy: userData.emailToName[row[10]] || row[10], // ActionBy
-          actionByReason: row[12] || ""
+          actionByReason: row[12] || "",
+          sickNoteUrl: row[13] || "" // <-- 🛑 ADD THIS LINE
         });
       } catch (e) {
         Logger.log(`CRITICAL ERROR processing row ${i+1} for getMyRequests. Error: ${e.message}`);
@@ -2272,7 +2275,8 @@ function getAdminLeaveRequests(adminEmail, filter) {
         actionBy: userData.emailToName[row[10]] || row[10],
         supervisorName: userData.emailToName[row[11]] || row[11],
         actionByReason: row[12] || "", // NEW
-        requesterBalance: requesterBalance 
+        requesterBalance: requesterBalance,
+        sickNoteUrl: row[13] || "" // <-- 
       });
     } catch (e) {
        Logger.log(`Failed to process row ${i+1} for getAdminLeaveRequests. Error: ${e.message}`);
@@ -2281,7 +2285,7 @@ function getAdminLeaveRequests(adminEmail, filter) {
   return results;
 }
 
-// UPDATED: Now automatically finds supervisor
+// REPLACE this function
 function submitLeaveRequest(submitterEmail, request, targetUserEmail) {
   const ss = getSpreadsheet();
   const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.database);
@@ -2295,15 +2299,12 @@ function submitLeaveRequest(submitterEmail, request, targetUserEmail) {
     throw new Error(`Could not find user ${requestEmail} in the Data Base.`);
   }
   
-  // --- NEW: Auto-find supervisor ---
   const supervisorEmail = userData.emailToSupervisor[requestEmail];
   if (!supervisorEmail) {
      throw new Error(`Cannot submit request. User ${requestName} does not have a supervisor assigned in the Data Base.`);
   }
-  // --- END NEW ---
   
   const reqSheet = getOrCreateSheet(ss, SHEET_NAMES.leaveRequests);
-  
   const startDate = new Date(request.startDate + 'T00:00:00');
   let endDate;
   if (request.endDate) {
@@ -2314,14 +2315,12 @@ function submitLeaveRequest(submitterEmail, request, targetUserEmail) {
 
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / ONE_DAY_MS) + 1;
-
   if (totalDays < 1) {
     throw new Error("Invalid date range.");
   }
   
   const balanceKey = request.leaveType.toLowerCase(); 
   const userBalances = userData.emailToBalances[requestEmail];
-  
   if (!userBalances || userBalances[balanceKey] === undefined) {
     throw new Error(`Could not find balance information for user ${requestName}. Check the Data Base sheet.`);
   }
@@ -2329,6 +2328,33 @@ function submitLeaveRequest(submitterEmail, request, targetUserEmail) {
   if (userBalances[balanceKey] < totalDays) {
     throw new Error(`Insufficient balance for ${requestName}. User has ${userBalances[balanceKey]} ${request.leaveType} days, but are requesting ${totalDays}.`);
   }
+
+  // --- START NEW FILE UPLOAD LOGIC ---
+  let sickNoteUrl = ""; // Default to empty string
+
+  if (request.fileInfo) {
+    // A file was included in the request object
+    try {
+      const folder = DriveApp.getFolderById(SICK_NOTE_FOLDER_ID);
+      const fileData = Utilities.base64Decode(request.fileInfo.data);
+      const blob = Utilities.newBlob(fileData, request.fileInfo.type, request.fileInfo.name);
+      
+      // Create a unique name
+      const newFileName = `${requestName}_${new Date().toISOString()}_${request.fileInfo.name}`;
+      const newFile = folder.createFile(blob).setName(newFileName);
+      
+      sickNoteUrl = newFile.getUrl();
+    } catch (e) {
+      Logger.log("File Upload Error: " + e.message);
+      throw new Error("Failed to upload sick note file. Please try again.");
+    }
+  }
+
+  // Backend mandatory check
+  if (balanceKey === 'sick' && !sickNoteUrl) {
+    throw new Error("A PDF sick note is mandatory for sick leave.");
+  }
+  // --- END NEW FILE UPLOAD LOGIC ---
 
   const requestID = `req_${new Date().getTime()}`;
   
@@ -2344,7 +2370,9 @@ function submitLeaveRequest(submitterEmail, request, targetUserEmail) {
     request.reason,
     "", // ActionDate
     "", // ActionBy
-    supervisorEmail // Use the auto-found supervisor
+    supervisorEmail,
+    "", // ActionReason
+    sickNoteUrl // <-- ADDED NEW COLUMN
   ]);
   
   SpreadsheetApp.flush(); 
