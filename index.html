@@ -1623,12 +1623,19 @@
 
           <form id="leave-form" class="form-container">
             <h2>Submit Leave Request</h2>
-            <div class="form-group"><label for="leave-type">Leave Type</label><select id="leave-type"><option value="Annual">Annual</option><option value="Sick">Sick</option><option value="Casual">Casual</option></select></div>
+            <div class="form-group"><label for="leave-type">Leave Type</label>
+            <select id="leave-type" onchange="toggleSickNoteField()"><option value="Annual">Annual</option><option value="Sick">Sick</option><option value="Casual">Casual</option></select></div>
             <div class="form-row">
               <div class="form-group"><label for="leave-start-date">Start Date</label><input type="date" id="leave-start-date" required></div>
               <div class="form-group"><label for="leave-end-date">End Date</label><input type="date" id="leave-end-date"><small>Leave blank for a single-day request.</small></div>
             </div>
             <div class="form-group"><label for="leave-reason">Reason (Optional)</label><textarea id="leave-reason" rows="3"></textarea></div>
+            <div id="sick-note-upload-group" class="form-group" style="display: none;">
+              <label for="sick-note-file">Upload Sick Note (PDF Required)</label>
+              <input type="file" id="sick-note-file" class="form-group" accept=".pdf" style="border: none; padding: 0;">
+              <small>This is mandatory for all 'Sick' leave requests.</small>
+            </div>
+            
             <button type="button" class="submit-btn-green" onclick="submitLeaveRequest()">Submit Request</button>
           </form>
           <div id="leave-status" class="status-message"></div>
@@ -2966,7 +2973,9 @@ function getStatusClass(status) {
                 </p>
                 <p><strong>Submitted:</strong> ${formatDate(req.requestedDate)}</p>
                 ${req.reason ? `<p><strong>Reason:</strong> ${req.reason}</p>` : ''}
+                ${req.sickNoteUrl ? `<p><strong>Sick Note:</strong> <a href="${req.sickNoteUrl}" target="_blank" style="color:var(--konecta-blue); font-weight: 600;">View PDF</a></p>` : ''}
                 <p class="supervisor-info text-color-secondary"><strong>Supervisor:</strong> ${req. supervisorName || 'N/A'}</p>
+
                 ${actionHtml}
                 ${req.actionByReason ? `<p><strong>Admin Reason:</strong> ${req.actionByReason}</p>` : ''}
 
@@ -2980,57 +2989,125 @@ function getStatusClass(status) {
         listDiv.innerHTML = html;
       }
       
-      // --- Submit New Leave Request ---
+      // 🛑 ADD THIS NEW FUNCTION 🛑
+      function toggleSickNoteField() {
+        const leaveType = document.getElementById('leave-type').value;
+        const sickNoteGroup = document.getElementById('sick-note-upload-group');
+        const sickNoteInput = document.getElementById('sick-note-file');
+
+        if (leaveType === 'Sick') {
+          sickNoteGroup.style.display = 'block';
+          sickNoteInput.required = true;
+        } else {
+          sickNoteGroup.style.display = 'none';
+          sickNoteInput.required = false;
+          sickNoteInput.value = null; // Clear the file if they change their mind
+        }
+      }
+      
+      // 🛑 REPLACE your old submitLeaveRequest with this one 🛑
       function submitLeaveRequest() {
+        // 1. Get all form values
+        const leaveType = document.getElementById('leave-type').value;
+        const startDate = document.getElementById('leave-start-date').value;
+        let endDate = document.getElementById('leave-end-date').value;
+        const reason = document.getElementById('leave-reason').value;
+        const fileInput = document.getElementById('sick-note-file');
+        const file = fileInput.files[0];
+
         try {
-          const leaveType = document.getElementById('leave-type').value;
-          const startDate = document.getElementById('leave-start-date').value;
-          let endDate = document.getElementById('leave-end-date').value;
-          const reason = document.getElementById('leave-reason').value;
-          
+          // 2. Perform validation
           if (!startDate) throw new Error("Please select a Start Date.");
           if (!endDate) endDate = startDate; 
           
           if (new Date(endDate) < new Date(startDate)) {
             throw new Error("End Date cannot be before Start Date.");
           }
-          
+
           const requestObject = {
             leaveType: leaveType,
             startDate: startDate,
             endDate: endDate,
-            reason: reason
+            reason: reason,
+            fileInfo: null // We'll add this next
           };
-          
-          setStatus('leave-status', 'processing', 'Submitting request...');
-          
-          google.script.run
-            .withSuccessHandler(msg => {
-              if (msg.startsWith('Error:')) { 
-                setStatus('leave-status', 'error', msg.replace('Error: ', ''));
-              } else {
-                setStatus('leave-status', 'success', msg);
-                document.getElementById('leave-form').reset();
-                document.getElementById('leave-start-date').valueAsDate = new Date();
-                
-                loadMyRequests();
-                google.script.run.withSuccessHandler(user => {
-                  populateMyBalances(user.myBalances);
-                }).getUserInfo();
-                if (selfRole === 'admin' || selfRole === 'superadmin') {
-                  const currentFilter = document.getElementById('filter-mine').classList.contains('active') ? 'mine' : 'all';
-                  loadPendingRequests(currentFilter);
-                }
-              }
-            })
-            .withFailureHandler(err => {
-              setStatus('leave-status', 'error', err.message);
-            })
-            .webSubmitLeaveRequest(requestObject, null);
+
+          // 3. Check if file is required
+          if (leaveType === 'Sick') {
+            if (!file) {
+              throw new Error("A PDF sick note is mandatory for sick leave.");
+            }
+            if (file.type !== 'application/pdf') {
+              throw new Error("Only .pdf files are allowed.");
+            }
+            if (file.size > 5 * 1024 * 1024) { // 5MB limit
+              throw new Error("File is too large. Maximum size is 5MB.");
+            }
+
+            // --- File is valid, read it ---
+            setStatus('leave-status', 'processing', 'Uploading PDF... This may take a moment.');
+            const reader = new FileReader();
+
+            // 4. This runs when the file is done reading
+            reader.onload = function(e) {
+              const fileData = e.target.result.split(',')[1]; // Get Base64 data
+              
+              requestObject.fileInfo = { 
+                name: file.name, 
+                type: file.type, 
+                data: fileData 
+              };
+              
+              // 5. Now call the server
+              runSubmitLeaveRequest(requestObject);
+            };
+            
+            reader.onerror = function(e) {
+              throw new Error("Error reading the file.");
+            };
+
+            // 6. Start reading the file
+            reader.readAsDataURL(file);
+
+          } else {
+            // --- No file needed, submit directly ---
+            setStatus('leave-status', 'processing', 'Submitting request...');
+            runSubmitLeaveRequest(requestObject);
+          }
           
         } catch (err) {
           setStatus('leave-status', 'error', err.message);
         }
+      }
+
+      // 🛑 ADD THIS NEW HELPER FUNCTION 🛑
+      // This function contains the google.script.run call
+      function runSubmitLeaveRequest(requestObject) {
+        google.script.run
+          .withSuccessHandler(msg => {
+            if (msg.startsWith('Error:')) { 
+              setStatus('leave-status', 'error', msg.replace('Error: ', ''));
+            } else {
+              setStatus('leave-status', 'success', msg);
+              document.getElementById('leave-form').reset();
+              document.getElementById('leave-start-date').valueAsDate = new Date();
+              toggleSickNoteField(); // This will hide and clear the file input
+              
+              loadMyRequests();
+              google.script.run.withSuccessHandler(user => {
+                populateMyBalances(user.myBalances);
+              }).getUserInfo();
+              // Refresh admin panel if open (this logic was in your original file)
+              // if (selfRole === 'admin' || selfRole === 'superadmin') {
+              //   const currentFilter = document.getElementById('filter-mine').classList.contains('active') ? 'mine' : 'all';
+              //   loadPendingRequests(currentFilter);
+              // }
+            }
+          })
+          .withFailureHandler(err => {
+            setStatus('leave-status', 'error', err.message);
+          })
+          .webSubmitLeaveRequest(requestObject, null);
       }
       // *** START NEW FUNCTION ***
       function submitAdminRequest() {
@@ -3144,6 +3221,8 @@ function getStatusClass(status) {
                   <p><strong>Dates:</strong> ${formatDate(req.startDate)} to ${formatDate(req.endDate)} (${req.totalDays} days)</p>
                   <p><strong>Submitted:</strong> ${formatDate(req.requestedDate)}</p>
                   ${req.reason ? `<p><strong>User Reason:</strong> ${req.reason}</p>` : ''}
+                  ${req.sickNoteUrl ? `<p><strong>Sick Note:</strong> <a href="${req.sickNoteUrl}" target="_blank" style="color:var(--konecta-blue); font-weight: 600;">View PDF</a></p>` : ''}
+                  
                   <p class="text-color-secondary"><strong>Supervisor:</strong> ${req.supervisorName || 'N/A'}</p>
                   ${balanceInfo}
                 </div>
