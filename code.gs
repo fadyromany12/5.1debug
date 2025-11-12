@@ -2034,7 +2034,6 @@ function timeDiffInSeconds(start, end) {
 }
 
 
-// REPLACE this function
 // ================= DAILY AUTO-LOG FUNCTION =================
 function dailyLeaveSweeper() {
   const ss = getSpreadsheet();
@@ -2042,23 +2041,21 @@ function dailyLeaveSweeper() {
   const adherenceSheet = getOrCreateSheet(ss, SHEET_NAMES.adherence);
   const logsSheet = getOrCreateSheet(ss, SHEET_NAMES.logs);
   const timeZone = Session.getScriptTimeZone();
-  
   // 1. Define the 7-day lookback period
   const lookbackDays = 7;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  
+
   const endDate = new Date(today); // Today
   endDate.setDate(endDate.getDate() - 1); // End date is yesterday
-  
+
   const startDate = new Date(endDate);
   startDate.setDate(startDate.getDate() - (lookbackDays - 1)); // Start date is 7 days ago
-  
+
   const startDateStr = Utilities.formatDate(startDate, timeZone, "MM/dd/yyyy");
   const endDateStr = Utilities.formatDate(endDate, timeZone, "MM/dd/yyyy");
 
   Logger.log(`Starting dailyLeaveSweeper for date range: ${startDateStr} to ${endDateStr}`);
-  
   // 2. Get all Adherence rows for the past 7 days and create a lookup Set
   const allAdherence = adherenceSheet.getDataRange().getValues();
   const adherenceLookup = new Set();
@@ -2075,31 +2072,31 @@ function dailyLeaveSweeper() {
     }
   }
   Logger.log(`Found ${adherenceLookup.size} existing adherence records in the date range.`);
-
   // 3. Get all Schedules and loop through them
   const allSchedules = scheduleSheet.getDataRange().getValues();
   let missedLogs = 0;
-  
   for (let i = 1; i < allSchedules.length; i++) {
     try {
-      // *** MODIFIED: Reading correct 6-column layout ***
-      const [schName, schDate, schStart, schEnd, schLeave, schEmail] = allSchedules[i];
-      const leaveType = (schLeave || "").toString().trim();
-      
-      // *** MODIFIED for Request 3: Only skip if no leave type (Day Off) or no user ***
+      // *** THIS LINE IS THE FIX ***
+      // It now correctly reads all 7 columns, matching your sheet structure.
+      const [schName, schDate, schStart, schEndDate, schEndTime, schLeave, schEmail] = allSchedules[i];
+      // *** END OF FIX ***
+
+      const leaveType = (schLeave || "").toString().trim(); // schLeave is now correctly column F (index 5)
+
+      // This logic is now correct because schLeave and schEmail are from the right columns
       if (leaveType === "" || !schName || !schEmail) {
         continue;
       }
 
      const schDateObj = parseDate(schDate);
-      
+
       if (schDateObj && schDateObj >= startDate && schDateObj <= endDate) {
         const schDateStr = Utilities.formatDate(schDateObj, timeZone, "MM/dd/yyyy");
         const userName = schName.toString().trim();
         const userNameLower = userName.toLowerCase();
-        
+
         const lookupKey = `${userNameLower}:${schDateStr}`;
-        
         // 4. Check if this user is *already* in the Adherence sheet
         if (adherenceLookup.has(lookupKey)) {
           continue; // We found them, so skip
@@ -2107,9 +2104,8 @@ function dailyLeaveSweeper() {
 
         // 5. We found a missed user!
         Logger.log(`Found missed user: ${userName} for ${schDateStr}. Logging: ${leaveType}`);
-        
+
         const row = findOrCreateRow(adherenceSheet, userName, schDateObj, schDateStr);
-        
         // *** MODIFIED for Request 3: Mark "Present" as "Absent" ***
         if (leaveType.toLowerCase() === "present") {
           adherenceSheet.getRange(row, 14).setValue("Absent"); // Set Leave Type to Absent
@@ -2122,7 +2118,7 @@ function dailyLeaveSweeper() {
           }
           logsSheet.appendRow([new Date(), userName, schEmail, "Auto-Log Leave", leaveType]);
         }
-        
+
         missedLogs++;
         adherenceLookup.add(lookupKey); // Add to lookup so we don't process again
       }
@@ -2130,7 +2126,7 @@ function dailyLeaveSweeper() {
       Logger.log(`Skipping schedule row ${i+1}: ${e.message}`);
     }
   }
-  
+
   Logger.log(`dailyLeaveSweeper finished. Logged ${missedLogs} missed users.`);
 }
 
@@ -2483,14 +2479,12 @@ function approveDenyRequest(adminEmail, requestID, newStatus, reason) {
 
 // ================= NEW/MODIFIED FUNCTIONS =================
 
-// REPLACE this function
 function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
   const ss = getSpreadsheet();
   const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.database);
   const userData = getUserDataFromDb(dbSheet);
   const adminRole = userData.emailToRole[adminEmail] || 'agent';
   const timeZone = Session.getScriptTimeZone();
-
   let targetUserNames = [];
   // Security Check: If user is an agent, force userNames to be only them
   if (adminRole === 'agent') {
@@ -2500,21 +2494,19 @@ function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
   } else {
     targetUserNames = userNames; // Admin can view the list they provided
   }
-  
+
   const targetUserSet = new Set(targetUserNames.map(name => name.toLowerCase()));
-  
   const startDate = new Date(startDateStr);
   const endDate = new Date(endDateStr);
   startDate.setHours(0, 0, 0, 0);
   endDate.setHours(23, 59, 59, 999);
-  
   const results = [];
 
   // *** NEW for Request 3: Get Schedule Data ***
   const scheduleSheet = getOrCreateSheet(ss, SHEET_NAMES.schedule);
   const scheduleData = scheduleSheet.getDataRange().getValues();
   const scheduleMap = {}; // Key: "username:mm/dd/yyyy", Value: "LeaveType"
-  
+
   for (let i = 1; i < scheduleData.length; i++) {
     const schName = (scheduleData[i][0] || "").toLowerCase();
     // Check against the lowercase name set
@@ -2523,7 +2515,10 @@ function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
         const schDate = parseDate(scheduleData[i][1]);
         if (schDate >= startDate && schDate <= endDate) {
           const schDateStr = Utilities.formatDate(schDate, timeZone, "MM/dd/yyyy");
-          const leaveType = scheduleData[i][4] || "Present";
+          // *** THIS LINE IS THE FIX ***
+          // It now reads from index 5 (Column F) instead of 4 (Column E).
+          const leaveType = scheduleData[i][5] || "Present";
+          // *** END OF FIX ***
           scheduleMap[`${schName}:${schDateStr}`] = leaveType;
         }
       } catch (e) { /* ignore invalid schedule dates */ }
@@ -2535,11 +2530,11 @@ function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
   const adherenceSheet = getOrCreateSheet(ss, SHEET_NAMES.adherence);
   const adherenceData = adherenceSheet.getDataRange().getValues();
   const resultsLookup = new Set(); // *** NEW: To track found records ***
-  
+
   for (let i = 1; i < adherenceData.length; i++) {
     const row = adherenceData[i];
     const rowUser = (row[1] || "").toString().trim().toLowerCase();
-    
+
     if (targetUserSet.has(rowUser)) {
       try {
         const rowDate = new Date(row[0]);
@@ -2573,29 +2568,26 @@ function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
       }
     }
   }
-  
+
   // *** NEW for Request 3: Fill in missing days ***
   let currentDate = new Date(startDate);
   const oneDayInMs = 24 * 60 * 60 * 1000;
-  
   while (currentDate <= endDate) {
     const currentDateStr = Utilities.formatDate(currentDate, timeZone, "MM/dd/yyyy");
-    
     for (const userName of targetUserNames) {
       const userNameLower = userName.toLowerCase();
       const adherenceKey = `${userNameLower}:${currentDateStr}`;
-      
       // If this user/day is NOT in the adherence sheet
       if (!resultsLookup.has(adherenceKey)) {
         const scheduleKey = `${userNameLower}:${currentDateStr}`;
         const leaveType = scheduleMap[scheduleKey]; // Get schedule (Present, Sick, etc)
-        
+
         let finalLeaveType = "Day Off"; // Default if no schedule
         if (leaveType) {
           // If scheduled "Present" but no record, they were "Absent"
           finalLeaveType = (leaveType.toLowerCase() === "present") ? "Absent" : leaveType;
         }
-        
+
         // Add a stub record
         results.push({
           date: convertDateToString(currentDate),
@@ -2612,7 +2604,7 @@ function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
     currentDate.setTime(currentDate.getTime() + oneDayInMs);
   }
   // *** END NEW ***
-  
+
   // Sort by date, then by user name
   results.sort((a, b) => {
     if (a.date < b.date) return -1;
@@ -2621,10 +2613,9 @@ function getAdherenceRange(adminEmail, userNames, startDateStr, endDateStr) {
     if (a.userName > b.userName) return 1;
     return 0;
   });
-  
   // This check is no longer needed as we fill stubs
   // if (results.length === 0) { ... }
-  
+
   return results;
 }
 
@@ -2759,7 +2750,6 @@ function importScheduleCSV(adminEmail, csvData) {
   const dbSheet = getOrCreateSheet(ss, SHEET_NAMES.database);
   const userData = getUserDataFromDb(dbSheet);
   const adminRole = userData.emailToRole[adminEmail] || 'agent';
-  
   if (adminRole !== 'admin' && adminRole !== 'superadmin') {
     throw new Error("Permission denied. Only admins can import schedules.");
   }
@@ -2772,7 +2762,6 @@ function importScheduleCSV(adminEmail, csvData) {
   // Build a map of existing schedules
   const userScheduleMap = {};
   for (let i = 1; i < scheduleData.length; i++) {
-    // *** MODIFIED: Read Col G (index 6) and Col B (index 1) ***
     const rowEmail = scheduleData[i][6];
     const rowDateRaw = scheduleData[i][1]; 
     if (rowEmail && rowDateRaw) {
@@ -2794,17 +2783,20 @@ function importScheduleCSV(adminEmail, csvData) {
   for (const row of csvData) {
     try {
       // *** MODIFIED: Read new 7-column CSV headers ***
-      // Assumes CSV headers are: Name, Email, StartDate, StartTime, EndDate, EndTime, LeaveType
       const userName = row.Name;
-      const userEmail = (row.Email || "").toLowerCase();
+      const userEmail = (row['agent email'] || "").toLowerCase();
       const startDateStr = row.StartDate; // Expects MM/dd/yyyy
-      let startTime = row.StartTime || ""; // Expects HH:mm
-      const endDateStr = row.EndDate || "";   // Expects MM/dd/yyyy
-      let endTime = row.EndTime || "";   // Expects HH:mm
+      
+      // *** THESE TWO LINES ARE THE FIX ***
+      let startTime = row.ShiftStartTime || ""; // <-- FIXED (was row.StartTime)
+      const endDateStr = row.EndDate || ""; // Expects MM/dd/yyyy
+      let endTime = row.ShiftEndTime || ""; // <-- FIXED (was row.EndTime)
+      // *** END OF FIX ***
+      
       let leaveType = row.LeaveType || "Present";
       
       if (!userName || !userEmail || !startDateStr) {
-        throw new Error("Missing required field (Name, Email, or StartDate).");
+        throw new Error("Missing required field (Name, StartDate, or agent email).");
       }
       
       // If leave type is not Present, clear times and EndDate
@@ -2814,22 +2806,19 @@ function importScheduleCSV(adminEmail, csvData) {
       }
 
       const targetStartDate = parseDate(startDateStr);
-if (!targetStartDate || isNaN(targetStartDate.getTime())) {
+      if (!targetStartDate || isNaN(targetStartDate.getTime())) {
         throw new Error(`Invalid StartDate format: ${startDateStr}. Use MM/dd/yyyy`);
       }
       
-      // *** MODIFIED: Handle optional EndDate ***
       let targetEndDate = null;
       if (leaveType.toLowerCase() === "present" && endDateStr) {
         targetEndDate = parseDate(endDateStr);
-if (!targetEndDate || isNaN(targetEndDate.getTime())) {
+        if (!targetEndDate || isNaN(targetEndDate.getTime())) {
           throw new Error(`Invalid EndDate format: ${endDateStr}. Use MM/dd/yyyy`);
         }
       } else {
-        // If not present or no EndDate provided, use the StartDate
         targetEndDate = new Date(targetStartDate);
       }
-      // *** END MODIFICATION ***
 
       const emailMap = userScheduleMap[userEmail] || {};
       
